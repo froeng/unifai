@@ -159,21 +159,6 @@ unifai/
     └── response_adapter.py  # Response normalization
 ```
 
-## Testing
-
-Run the test suite to verify your setup:
-
-```bash
-python test_refactor.py
-```
-
-This will test:
-- ✅ Package imports
-- ✅ Client creation
-- ✅ Model listing (for providers with API keys)
-- ✅ Basic chat completions
-- ✅ Beta parsing with Pydantic models
-
 ## Migration Guide
 
 UnifAI is designed as a drop-in replacement for OpenAI Python client code:
@@ -211,7 +196,6 @@ class MyProviderAdapter(BaseAdapter):
 ```
 
 2. Update `client.py` to handle your provider's initialization
-3. Add tests in `test_refactor.py`
 
 ### Development Setup
 
@@ -219,7 +203,6 @@ class MyProviderAdapter(BaseAdapter):
 git clone <repository>
 cd unifai
 pip install -e .
-python test_refactor.py
 ```
 
 ## License

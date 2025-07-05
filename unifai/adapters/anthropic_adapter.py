@@ -18,12 +18,29 @@ class BetaCompletionsAdapter:
         """
         Adapt OpenAI's beta chat completion format to Anthropic's structured output.
         """
+        # Extract system messages and concatenate them
+        system_messages = []
+        non_system_messages = []
+        
+        for message in messages:
+            if message.get("role") == "system":
+                system_messages.append(message["content"])
+            else:
+                non_system_messages.append(message)
+        
+        # Concatenate all system messages
+        system_content = "\n\n".join(system_messages) if system_messages else ""
+        
         anthropic_kwargs = {
             "model": model,
-            "messages": messages,
+            "messages": non_system_messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        
+        # Add system parameter if we have system content
+        if system_content:
+            anthropic_kwargs["system"] = system_content
 
         if response_format is not None:
             if isinstance(response_format, dict) and response_format.get("type") == "json_object":
@@ -108,12 +125,31 @@ class ChatCompletionsAdapter:
         """
         Adapt OpenAI's chat completion format to Anthropic's format.
         """
-        response = self.client.messages.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
+        # Extract system messages and concatenate them
+        system_messages = []
+        non_system_messages = []
+        
+        for message in messages:
+            if message.get("role") == "system":
+                system_messages.append(message["content"])
+            else:
+                non_system_messages.append(message)
+        
+        # Concatenate all system messages
+        system_content = "\n\n".join(system_messages) if system_messages else ""
+        
+        anthropic_kwargs = {
+            "model": model,
+            "messages": non_system_messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+        
+        # Add system parameter if we have system content
+        if system_content:
+            anthropic_kwargs["system"] = system_content
+        
+        response = self.client.messages.create(**anthropic_kwargs)
 
         usage = extract_usage(response.usage)
         openai_format = {
