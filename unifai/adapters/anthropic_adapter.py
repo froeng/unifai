@@ -1,3 +1,4 @@
+import json
 from typing import Any, Dict, List, Optional
 import anthropic
 
@@ -13,6 +14,19 @@ def _extract_system_messages(messages: List[Dict[str, str]]) -> tuple[str, List[
     for message in messages:
         if message.get("role") == "system":
             system_messages.append(message["content"])
+        elif message.get("role") == "tool":
+            # Convert OpenAI tool message format to Anthropic format
+            tool_result = {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": message.get("tool_call_id", "unknown"),
+                        "content": message["content"]
+                    }
+                ]
+            }
+            non_system_messages.append(tool_result)
         else:
             non_system_messages.append(message)
     
@@ -61,24 +75,26 @@ def _handle_tools(anthropic_kwargs: Dict[str, Any], tools: List[Dict[str, Any]],
     if not tools:
         return
         
-    anthropic_tools = [
-        {"function": {
-            "name": tool["function"]["name"],
-            "description": tool["function"].get("description", ""),
-            "input_schema": tool["function"]["parameters"]
-        }} for tool in tools if tool["type"] == "function"
-    ]
+    anthropic_tools = []
+    for tool in tools:
+        if tool["type"] == "function":
+            anthropic_tool = {
+                "name": tool["function"]["name"],
+                "description": tool["function"].get("description", ""),
+                "input_schema": tool["function"]["parameters"]
+            }
+            anthropic_tools.append(anthropic_tool)
     
     if anthropic_tools:
         anthropic_kwargs["tools"] = anthropic_tools
         tool_choice = kwargs.get("tool_choice", None)
         if tool_choice and tool_choice != "auto":
             if tool_choice == "required":
-                anthropic_kwargs["tool_choice"] = "required"
+                anthropic_kwargs["tool_choice"] = {"type": "any"}
             elif isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
                 func_name = tool_choice["function"]["name"]
-                if any(t["function"]["name"] == func_name for t in anthropic_tools):
-                    anthropic_kwargs["tool_choice"] = {"type": "function", "name": func_name}
+                if any(t["name"] == func_name for t in anthropic_tools):
+                    anthropic_kwargs["tool_choice"] = {"type": "tool", "name": func_name}
 
 
 def _create_structured_response(response: Any, response_format: Any) -> Dict[str, Any]:
@@ -109,20 +125,53 @@ def _create_structured_response(response: Any, response_format: Any) -> Dict[str
 def _create_standard_response(response: Any) -> Dict[str, Any]:
     """Create OpenAI-format response for standard chat completion."""
     usage = extract_usage(response.usage)
-    return {
+    openai_format = {
         "id": response.id,
         "object": "chat.completion",
         "model": response.model,
         "choices": [{
             "message": {
                 "role": "assistant",
-                "content": response.content[0].text
+                "content": None
             },
             "index": 0,
             "finish_reason": response.stop_reason
         }],
         "usage": usage
     }
+    
+    # Handle different response types
+    if hasattr(response, 'content') and response.content:
+        content_block = response.content[0]
+        
+        if hasattr(content_block, 'type'):
+            if content_block.type == "text":
+                # Regular text response
+                openai_format["choices"][0]["message"]["content"] = content_block.text
+            elif content_block.type == "tool_use":
+                # Tool call response
+                tool_calls = []
+                for i, block in enumerate(response.content):
+                    if block.type == "tool_use":
+                        tool_call = {
+                            "id": block.id,
+                            "type": "function",
+                            "function": {
+                                "name": block.name,
+                                "arguments": json.dumps(block.input) if hasattr(block, 'input') else "{}"
+                            }
+                        }
+                        tool_calls.append(tool_call)
+                
+                if tool_calls:
+                    openai_format["choices"][0]["message"]["tool_calls"] = tool_calls
+                    openai_format["choices"][0]["message"]["content"] = ""
+        else:
+            # Fallback for text content
+            if hasattr(content_block, 'text'):
+                openai_format["choices"][0]["message"]["content"] = content_block.text
+    
+    return openai_format
 
 
 class BetaCompletionsAdapter:
@@ -171,12 +220,19 @@ class ChatCompletionsAdapter:
     def create(self, model: str, messages: List[Dict[str, str]], 
                max_tokens: Optional[int] = 1000, 
                temperature: Optional[float] = 1.0,
+               tools: List[Dict[str, Any]] = None,
+               tool_choice: Optional[Any] = None,
                **kwargs) -> Dict[str, Any]:
         """
         Adapt OpenAI's chat completion format to Anthropic's format.
+        Supports both regular chat and tool calls.
         """
         system_content, non_system_messages = _extract_system_messages(messages)
         anthropic_kwargs = _build_anthropic_kwargs(model, non_system_messages, max_tokens, temperature, system_content)
+        
+        # Handle tools if provided
+        if tools:
+            _handle_tools(anthropic_kwargs, tools, tool_choice=tool_choice, **kwargs)
         
         response = self.client.messages.create(**anthropic_kwargs)
         openai_format = _create_standard_response(response)
